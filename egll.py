@@ -42,7 +42,10 @@ class egll(Battery):
 
     # Modbus uses 7C call vs Lifepower 7E, as return values do not correlate to the Lifepower ones if 7E is used.
     # at least on my own BMS.
-    debug = True  # Set to true for wordy debugging in logs
+    debug = False  # Set to true for wordy debugging in logs
+    debug_hex = False
+    debug_config_hex = False
+    debug_config = False
     balancing = 0
     BATTERYTYPE = "egll"
     LENGTH_CHECK = 0
@@ -57,32 +60,48 @@ class egll(Battery):
         # call a function that will connect to the battery, send a command and retrieve the result.
         # The result or call should be unique to this BMS. Battery name or version, etc.
         # Return True if success, False for failure
-        logger.info(f'egll test connection')
-        result = False
+        logger.info(f'EG4-LL Test Connection')
+        self.command_address = b"\0x7C"
         try:
-            check1 = self.read_gen_data()
-            sleep(.5)
-            # get first data to show in startup log
-            check2 = self.refresh_data()
-            if check1 and check2:
+            result = self.read_gen_data()
+            result = self.get_settings()
+            if result is True:
                 return True
         except Exception as err:
             logger.error(f"Unexpected {err=}, {type(err)=}")
-            result = False
-
-        return True
+            return False
 
     def get_settings(self):
         # After successful  connection get_settings will be call to set up the battery.
         # Return True if success, False for failure
+        status_results = self.read_cell_data()
+
+        if status_results is True:
+            config_results = self.read_serial_data_egll(self.command_get_config)
+        else:
+            return False
+
+        if (self.debug_config):
+            logger.info(f'Returned: [{config_results[0:187].hex(":").upper()}]')
+            logger.info(f'Cell Under Voltage Warning (V): {int.from_bytes(config_results[35:37], "big")/1000}')
+            logger.info(f'Cell Over Voltage Warning (V): {int.from_bytes(config_results[47:49], "big")/1000}')
+            logger.info(f'Balancer Voltage (V): {int.from_bytes(config_results[25:27], "big")/1000}')
+            logger.info(f'Balancer Difference (mV): {int.from_bytes(config_results[27:29], "big")}')
+
+        self.MIN_CELL_VOLTAGE = int.from_bytes(config_results[35:37], "big")/1000
+        self.MAX_CELL_VOLTAGE = int.from_bytes(config_results[47:49], "big")/1000
+        self.FLOAT_CELL_VOLTAGE = MAX_CELL_VOLTAGE - .9
+
+        self.min_battery_voltage = self.MIN_CELL_VOLTAGE * self.cell_count
+        self.max_battery_voltage = self.MAX_CELL_VOLTAGE * self.cell_count
 
         self.max_battery_charge_current = utils.MAX_BATTERY_CHARGE_CURRENT
         self.max_battery_discharge_current = utils.MAX_BATTERY_DISCHARGE_CURRENT
-        result = self.read_cell_data()
-        self.poll_interval = 1000
 
-        if result is False:
-            return False
+        self.balancer_voltage = int.from_bytes(config_results[25:27], "big")/1000
+        self.balancer_current_delta = int.from_bytes(config_results[27:29], "big")/10000
+
+        self.poll_interval = 2000
 
         return True
 
@@ -91,21 +110,24 @@ class egll(Battery):
         # This will be called for every iteration (1 second)
         # Return True if success, False for failure
         result = self.read_cell_data()
-        return result
+        if result is False:
+            return False
+
+        return True
 
     def read_gen_data(self):
 
-        version = self.read_serial_data_egll(self.command_get_version)
+        result = self.read_serial_data_egll(self.command_get_version)
 
-        # check if connection success
-        if version is False:
+        if result is False:
             return False
-        else:
-            return True
 
-        #self.custom_field = version[2:27].decode("utf-8")
-        #self.hardware_version = version[27:33].decode("utf-8")
-        #self.unique_identifier = version[33:50].decode("utf-8")
+        self.version = ( self.BATTERYTYPE + " ver ( " + str(result[0:29]), "utf-8" + ")" )
+        self.custom_field = result[2:27].decode("utf-8")
+        self.hardware_version = result[27:33].decode("utf-8")
+        self.unique_identifier = result[33:49].decode("utf-8")
+
+        return True
 
     def read_cell_data(self):
         packet = self.read_serial_data_egll(self.command_get_stats)
@@ -113,7 +135,7 @@ class egll(Battery):
         if packet is False:
             return False
 
-        if (self.debug):
+        if (self.debug_hex):
             logger.info(f'===== BMS Com Raw - Parsed =====')
             logger.info(f'Battery Voltage Raw: {packet[3:5].hex(":").upper()}')
             logger.info(f'Current RAW: {packet[5:7].hex(":").upper()}')
@@ -138,18 +160,23 @@ class egll(Battery):
         self.capacity = (int.from_bytes(packet[65:69], "big")/3600/1000)
         self.max_battery_charge_current = int.from_bytes(packet[47:49], "big")
         self.soc = int.from_bytes(packet[51:53], "big")
+        self.soh = int.from_bytes(packet[49:51], "big")
         self.cycles = int.from_bytes(packet[61:65], "big")
         self.temp1 = int.from_bytes(packet[39:41], "big", signed=True)
         self.temp2 = int.from_bytes(packet[69:70], "big", signed=True)
-        self.temp3 = int.from_bytes(packet[70:71], "big", signed=True)
+        self.temp_mos = int.from_bytes(packet[70:71], "big", signed=True)
         self.cell_count = int.from_bytes(packet[75:77], "big")
-        self.min_battery_voltage = utils.MIN_CELL_VOLTAGE * self.cell_count
-        self.max_battery_voltage = utils.MAX_CELL_VOLTAGE * self.cell_count
+        status_hex = packet[54:55].hex().upper()
+        warning_hex = packet[55:57].hex().upper()
+        protection_hex = packet[57:59].hex().upper()
+        error_hex = packet[59:61].hex().upper()
+        heater_status = packet[53:54].hex().upper()
 
-        cell_total = 0
+        cell_average = cell_total = 0
         cell_start_pos = 7
         cell_end_pos = 9
-        i = 0
+        self.cell_min = 3.6
+        self.cell_max = 0
 
         if len(self.cells) != self.cell_count:
             self.cells = []
@@ -158,160 +185,162 @@ class egll(Battery):
 
         for c in range(self.cell_count):
             cell_voltage = int.from_bytes(packet[cell_start_pos:cell_end_pos], "big")/1000
+            if self.cell_min > cell_voltage:
+                self.cell_min = cell_voltage
+            if self.cell_max < cell_voltage:
+                self.cell_max = cell_voltage
             cell_total += cell_voltage
+            cell_average += cell_voltage
             cell_start_pos += 2
             cell_end_pos += 2
-            self.cells[i].voltage = cell_voltage
-            i += 1
+            self.cells[c].voltage = cell_voltage
+        self.cell_average = cell_average / self.cell_count
 
-        if packet[53:55].hex().upper() == "0000":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Inactive/Stanby')
-        elif packet[53:55].hex().upper() == "0001":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Inactive/Charging')
-        elif packet[53:55].hex().upper() == "0002":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Inactive/Discharging')
-        elif packet[53:55].hex().upper() == "0004":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Inactive/Protect')
-        elif packet[53:55].hex().upper() == "0008":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Inactive/Charging Limit')
-        elif packet[53:55].hex().upper() == "8000":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Active/Stand By')
-        elif packet[53:55].hex().upper() == "8001":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Active/Charging')
-        elif packet[53:55].hex().upper() == "8002":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Active/Discharging')
-        elif packet[53:55].hex().upper() == "8004":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Active/Protect')
-        elif packet[53:55].hex().upper() == "8008":
-            status_code = (f'Status: {packet[53:55].hex().upper()} - Active/Charging Limit')
+        if status_hex == "00":
+            status_code = 'Stanby'
+        elif status_hex == "01":
+            status_code = 'Charging'
+        elif status_hex == "02":
+            status_code = 'Discharging'
+        elif status_hex == "04":
+            status_code = 'Protect'
+        elif status_hex == "08":
+            status_code = 'Charging Limit'
 
-        if packet[55:57].hex().upper() == "0000":
-            warning_alarm = (f'No Warnings - {packet[55:57].hex(":").upper()}')
-        elif packet[55:57].hex().upper() == "0001":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Pack Over Voltage')
+        if heater_status == "00":
+            heater_state = False
+        elif heater_status == "80":
+            heater_state = True
+
+        if warning_hex == "0000":
+            warning_alarm = (f'No Warnings - {warning_hex}')
+        elif warning_hex == "0001":
+            warning_alarm = (f'Warning: {warning_hex} - Pack Over Voltage')
             self.voltage_high = 1
-        elif packet[55:57].hex().upper() == "0002":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Cell Over Voltage')
+        elif warning_hex == "0002":
+            warning_alarm = (f'Warning: {warning_hex} - Cell Over Voltage')
             self.voltage_cell_high = 1
-        elif packet[55:57].hex().upper() == "0004":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Pack Under Voltage')
+        elif warning_hex == "0004":
+            warning_alarm = (f'Warning: {warning_hex} - Pack Under Voltage')
             self.voltage_low = 1
-        elif packet[55:57].hex().upper() == "0008":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Cell Under Voltage')
+        elif warning_hex == "0008":
+            warning_alarm = (f'Warning: {warning_hex} - Cell Under Voltage')
             self.voltage_cell_low = 1
-        elif packet[55:57].hex().upper() == "0010":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Charge Over Current')
+        elif warning_hex == "0010":
+            warning_alarm = (f'Warning: {warning_hex} - Charge Over Current')
             self.current_over = 1
-        elif packet[55:57].hex().upper() == "0020":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Discharge Over Current')
+        elif warning_hex == "0020":
+            warning_alarm = (f'Warning: {warning_hex} - Discharge Over Current')
             self.current_over = 1
-        elif packet[55:57].hex().upper() == "0040":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Ambient High Temp')
+        elif warning_hex == "0040":
+            warning_alarm = (f'Warning: {warning_hex} - Ambient High Temp')
             self.temp_high_internal = 1
-        elif packet[55:57].hex().upper() == "0080":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Mosfets High Temp')
+        elif warning_hex == "0080":
+            warning_alarm = (f'Warning: {warning_hex} - Mosfets High Temp')
             self.temp_high_internal = 1
-        elif packet[55:57].hex().upper() == "0100":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Charge Over Temp')
+        elif warning_hex == "0100":
+            warning_alarm = (f'Warning: {warning_hex} - Charge Over Temp')
             self.temp_high_charge = 1
-        elif packet[55:57].hex().upper() == "0200":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Discharge Over Temp')
+        elif warning_hex == "0200":
+            warning_alarm = (f'Warning: {warning_hex} - Discharge Over Temp')
             self.temp_high_discharge = 1
-        elif packet[55:57].hex().upper() == "0400":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Charge Under Temp')
+        elif warning_hex == "0400":
+            warning_alarm = (f'Warning: {warning_hex} - Charge Under Temp')
             self.temp_low_charge = 1
-        elif packet[55:57].hex().upper() == "1000":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Low Capacity')
+        elif warning_hex == "1000":
+            warning_alarm = (f'Warning: {warning_hex} - Low Capacity')
             self.soc_low = 1
-        elif packet[55:57].hex().upper() == "2000":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - Float Stoped')
-        elif packet[55:57].hex().upper() == "4000":
-            warning_alarm = (f'Warning: {packet[55:57].hex(":").upper()} - UNKNOWN')
+        elif warning_hex == "2000":
+            warning_alarm = (f'Warning: {warning_hex} - Float Stoped')
+        elif warning_hex == "4000":
+            warning_alarm = (f'Warning: {warning_hex} - UNKNOWN')
             self.internal_failure = 1
 
-        if packet[57:59].hex().upper() == "0000":
-            protection_alarm = (f'No Protection Events - {packet[57:59].hex(":").upper()}')
-        elif packet[57:59].hex().upper() == "0001":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Pack Over Voltage')
+        if protection_hex == "0000":
+            protection_alarm = (f'No Protection Events - {protection_hex}')
+        elif protection_hex == "0001":
+            protection_alarm = (f'Protection: {protection_hex} - Pack Over Voltage')
             self.voltage_high = 2
-        elif packet[57:59].hex().upper() == "0002":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Cell Over Voltage')
+        elif protection_hex == "0002":
+            protection_alarm = (f'Protection: {protection_hex} - Cell Over Voltage')
             self.voltage_cell_high = 2
-        elif packet[57:59].hex().upper() == "0004":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Pack Under Voltage')
+        elif protection_hex == "0004":
+            protection_alarm = (f'Protection: {protection_hex} - Pack Under Voltage')
             self.voltage_low = 2
-        elif packet[57:59].hex().upper() == "0008":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Cell Under Voltage')
+        elif protection_hex == "0008":
+            protection_alarm = (f'Protection: {protection_hex} - Cell Under Voltage')
             self.voltage_cell_low = 2
-        elif packet[57:59].hex().upper() == "0010":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Charge Over Current')
+        elif protection_hex == "0010":
+            protection_alarm = (f'Protection: {protection_hex} - Charge Over Current')
             self.current_over = 2
-        elif packet[57:59].hex().upper() == "0020":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Discharge Over Current')
+        elif protection_hex == "0020":
+            protection_alarm = (f'Protection: {protection_hex} - Discharge Over Current')
             self.current_over = 2
-        elif packet[57:59].hex().upper() == "0040":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - High Ambient Temp')
+        elif protection_hex == "0040":
+            protection_alarm = (f'Protection: {protection_hex} - High Ambient Temp')
             self.temp_high_internal = 2
-        elif packet[57:59].hex().upper() == "0080":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Mosfets High Temp')
+        elif protection_hex == "0080":
+            protection_alarm = (f'Protection: {protection_hex} - Mosfets High Temp')
             self.temp_high_internal = 2
-        elif packet[57:59].hex().upper() == "0100":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Charge Over Temp')
+        elif protection_hex == "0100":
+            protection_alarm = (f'Protection: {protection_hex} - Charge Over Temp')
             self.temp_high_charge = 2
-        elif packet[57:59].hex().upper() == "0200":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Discharge Over Temp')
+        elif protection_hex == "0200":
+            protection_alarm = (f'Protection: {protection_hex} - Discharge Over Temp')
             self.temp_high_discharge = 2
-        elif packet[57:59].hex().upper() == "0400":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Charge Under Temp')
+        elif protection_hex == "0400":
+            protection_alarm = (f'Protection: {protection_hex} - Charge Under Temp')
             self.temp_low_charge = 2
-        elif packet[57:59].hex().upper() == "0800":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Discharge Under Temp')
+        elif protection_hex == "0800":
+            protection_alarm = (f'Protection: {protection_hex} - Discharge Under Temp')
             self.temp_low_charge = 2
-        elif packet[57:59].hex().upper() == "1000":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Low Capacity')
+        elif protection_hex == "1000":
+            protection_alarm = (f'Protection: {protection_hex} - Low Capacity')
             self.soc_low = 2
-        elif packet[57:59].hex().upper() == "2000":
-            protection_alarm = (f'Protection: {packet[57:59].hex(":").upper()} - Discharge SC')
+        elif protection_hex == "2000":
+            protection_alarm = (f'Protection: {protection_hex} - Discharge SC')
 
-        if packet[59:61].hex().upper() == "0000":
-            error = (f'No Errors - {packet[59:61].hex(":").upper()}')
-        elif packet[59:61].hex().upper() == "0001":
-            error = (f'Error: {packet[59:61].hex(":").upper()} - Voltage Error')
-        elif packet[59:61].hex().upper() == "0002":
-            error = (f'Error: {packet[59:61].hex(":").upper()} - Temperature Error')
-        elif packet[59:61].hex().upper() == "0004":
-            error = (f'Error: {packet[59:61].hex(":").upper()} - Current Flow Error')
-        elif packet[59:61].hex().upper() == "0010":
-            error = (f'Error: {packet[59:61].hex(":").upper()} - Cell Unbalanced')
+        if error_hex == "0000":
+            error = (f'No Errors - {error_hex}')
+        elif error_hex == "0001":
+            error = (f'Error: {error_hex} - Voltage Error')
+        elif error_hex == "0002":
+            error = (f'Error: {error_hex} - Temperature Error')
+        elif error_hex == "0004":
+            error = (f'Error: {error_hex} - Current Flow Error')
+        elif error_hex == "0010":
+            error = (f'Error: {error_hex} - Cell Unbalanced')
 
-        logger.info(f'===== BMS Data =====')
+        logger.info(f'===== HW Info =====')
         logger.info(f'Battery Make/Model: {str(self.custom_field)}')
         logger.info(f'Hardware Version: {str(self.hardware_version)}')
-        #logger.info(f'Serial Number: {str(self.unique_identifier)}')
-        logger.info(f'Voltage (BMS): {self.voltage}v')
-        logger.info("Cell Total Voltage: " + "%.2fv" % cell_total)
-        logger.info(f'Current: {self.current}A')
-        logger.info(f' {status_code}')
-        logger.info(f'SoC: {self.soc}%')
+        logger.info(f'Serial Number: {str(self.unique_identifier)}')
+        logger.info(f'===== BMS Data =====')
+        logger.info(f'Cell Total Voltage: ' + '%.3fv' % cell_total +' | Current: '+ str(self.current) +'A')
         logger.info(f'Capacity Left: {self.capacity_remain} of {self.capacity} AH')
+        logger.info(f'SoC: {self.soc}% - {status_code}')
+        logger.info(f'===== DVCC State =====')
+        logger.info(f'DVCC Charger Mode: {self.charge_mode}')
+        logger.info(f'DVCC Charge Voltage: {self.control_voltage}v')
+        logger.info(f'Charge Current: {self.control_charge_current} | Discharge Current: {self.control_discharge_current}')
+        logger.info(f'Charge Limit: {self.charge_limitation} | Discharge Limit: {self.discharge_limitation}')
         logger.info(f'===== Warning/Alarms =====')
         logger.info(f' {warning_alarm}')
         logger.info(f' {protection_alarm}')
         logger.info(f' {error}')
         logger.info(f'===== Temp =====')
-        logger.info(f'Temp 1: {self.temp1} c - PCB')
-        logger.info(f'Temp 2: {self.temp2} c')
-        logger.info(f'Temp 3: {self.temp3} c')
-        logger.info(f'Avg Temp: {int.from_bytes(packet[41:43], "big", signed=True)} c')
-        logger.info(f'Temp Max: {int.from_bytes(packet[43:45], "big", signed=True)} c')
+        logger.info(f'Temp 1: {self.temp1}c | Temp 2: {self.temp2}c | Temp Mos: {self.temp_mos}c')
+        logger.info(f'Avg: {int.from_bytes(packet[41:43], "big", signed=True)}c | Temp Max: {int.from_bytes(packet[43:45], "big", signed=True)}c')
+        logger.info(f'Heater Status: {heater_state}')
         logger.info(f'===== Battery Stats =====')
-        logger.info(f'SoH: {int.from_bytes(packet[49:51], "big")}%')
-        logger.info(f'Cycle Count: {self.cycles}')
-        logger.info(f'Cell Count: {self.cell_count}')
+        logger.info(f'SoH: {self.soh}% | Cycle Count: {self.cycles}')
         logger.info(f'Max Charging Current: {self.max_battery_charge_current} A')
+        logger.info(f'===== Cell Stats =====')
+        for c in range(self.cell_count):
+            logger.info(f'Cell {c} Voltage: {self.cells[c].voltage}')
+        logger.info(f'Cell Max/Min/Diff: ({self.cell_max}/{self.cell_min}/{round((self.cell_max-self.cell_min), 3)})v')
 
         return True
-
     def read_temp_data(self):
         # Temp Data is collected when the cell data is read
         result = self.read_cell_data()
@@ -320,9 +349,21 @@ class egll(Battery):
         return True
 
     def get_balancing(self):
-        return 1 if self.balancing or self.balancing == 2 else 0
+        if (self.cell_max - self.cell_min) >= self.balancer_current_delta:
+            if self.cell_max >= self.balancer_voltage:
+                self.balancing = 1
+                logger.info(f'*** Balancing Battery ***')
+        else:
+            self.balancing = 0
+            logger.info(f'*** Not Balancing Battery ***')
+        if self.cell_average > self.balancer_voltage and round((self.cell_max-self.cell_min), 3) <= self.balancer_current_delta:
+            self.balacing = 2
+            logger.info(f'*** Finished Balancing Battery ***')
+
+        return self.balancing
 
     def read_bms_config(self):
+        logger.info(f'Executed read_bms_config function... function needs to be written')
         return True
 
     def generate_command(self, command):
@@ -332,24 +373,19 @@ class egll(Battery):
 
     def read_serial_data_egll(self, command):
         # use the read_serial_data() function to read the data and then do BMS specific checks (crc, start bytes, etc
-
         if (self.debug):
             logger.info(f'Modbus CMD Address: {hex(self.command_address[0]).upper()}')
-            runcommand = self.generate_command(command)
-            logger.info(f'Executed Command: {runcommand.hex(":").upper()}')
+            logger.info(f'Executed Command: {command.hex(":").upper()}')
 
         data = read_serial_data(
-            self.generate_command(command),
+            command,
             self.port,
             self.baud_rate,
             self.LENGTH_POS,
             self.LENGTH_CHECK
         )
         if (self.debug):
-            #logger.info(f'Device Port: {self.port}')
-            #logger.info(f'Baud Rate: {self.baud_rate}')
-            #logger.info(f'Input Command: {command.hex(":").upper()}')
-            logger.info(f'Return: {bytearray(data)}')
+            logger.info(f'Returned: [{data.hex(":").upper()}]')
 
         if data is False:
             logger.error("read_serial_data_egll::Serial Data is Bad")
@@ -359,13 +395,6 @@ class egll(Battery):
         modbus_address, modbus_type, modbus_cmd, modbus_packet_length = unpack_from(
         "BBBB", data
         )
-
-        if hex(modbus_cmd) == '0x46':
-            self.version = ( self.BATTERYTYPE + " ver ( " + str(data[0:29]), "utf-8" + ")" )
-            self.custom_field = data[2:27].decode("utf-8")
-            self.hardware_version = data[27:33].decode("utf-8")
-            self.unique_identifier = data[33:50].decode("utf-8")
-            logger.info(f'Serial Number: {str(unique_identifier)}')
 
         if (self.debug):
             logger.info(f'Modbus Address: {modbus_address} [{hex(modbus_address)}]')
@@ -379,4 +408,6 @@ class egll(Battery):
             return data # Pass the full packet from the BMS
         else:
             logger.error(">>> ERROR: Incorrect Reply")
+            logger.info(f'Modbus Type   : {modbus_type} [{hex(modbus_type)}]')
+            logger.info(f'Modbus PackLen: {modbus_packet_length} [{hex(modbus_packet_length)}]')
             return False
