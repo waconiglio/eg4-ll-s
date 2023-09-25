@@ -8,7 +8,7 @@ import struct
 import utils
 
 #    Author: Pfitz /
-#    Date: 6 Aug 2023
+#    Date: 23 Sept 2023
 #    Version 1.0
 #     Cell Voltage Implemented
 #     Hardware Name / Version / Serial Implemented
@@ -16,17 +16,21 @@ import utils
 #     SoH / SoC State Implemented
 #     Temp Implemented
 #     Battery Voltage / Current
+#     Balacing Status
+#     BMS Config Read (Limited Values right now)
+
+#     Tasks:
+#       - When starting via start-serial, the connection reports a not successful
+#         Yet, tailing the serial log it is clear the driver is loaded, and working
+#         as it should. Has been stable for me.
+
 
 # Battery Tested on:
 # Eg4 egll 12v 400 AH (single battery)
+# battery should be set to ID = 1 via the DIP switches
 
 # BMS Documentation Sourced:
 # https://eg4electronics.com/wp-content/uploads/2022/09/egll-MODBUS-Communication-Protocol_ENG-correct-1.pdf
-
-
-# Work Items:
-#  - Read BMS Config's
-#  - Balancing
 
 # add to file /data/etc/dbus-serialbattery/dbus-serialbattery.py
 # from bms.lifepower import egll
@@ -36,9 +40,22 @@ class egll(Battery):
     def __init__(self, port, baud, address):
 
         super(egll, self).__init__(port, baud, address)
+        self.charger_connected = None
+        self.load_connected = None
+        self.command_address = b"\0x7C" # 7C on my tianpower...
+        self.cell_min_voltage = None
+        self.cell_max_voltage = None
+        self.cell_min_no = None
+        self.cell_max_no = None
+        self.poll_interval = 2000
         self.type = self.BATTERYTYPE
-        #self.port='/dev/ttyUSB0'
-        self.command_address = b"\0x7C"  # 7C on my tianpower...
+        self.has_settings = 1
+        self.reset_soc = 0
+        self.soc_to_set = None
+        self.runtime = 0  # TROUBLESHOOTING for no reply errors
+        self.trigger_force_disable_discharge = None
+        self.trigger_force_disable_charge = None
+        self.cells_volts_data_lastreadbad = False
 
     # Modbus uses 7C call vs Lifepower 7E, as return values do not correlate to the Lifepower ones if 7E is used.
     # at least on my own BMS.
@@ -61,15 +78,17 @@ class egll(Battery):
         # The result or call should be unique to this BMS. Battery name or version, etc.
         # Return True if success, False for failure
         logger.info(f'EG4-LL Test Connection')
-        self.command_address = b"\0x7C"
-        try:
-            result = self.read_gen_data()
-            result = self.get_settings()
-            if result is True:
-                return True
-        except Exception as err:
-            logger.error(f"Unexpected {err=}, {type(err)=}")
-            return False
+
+        result = self.read_gen_data()
+        logger.info(f'Test Result: {result}')
+        if result:
+            self.get_settings()
+            logger.info(f'Poll Settings:')
+            return True
+        else:
+            logger.error(">>> ERROR: No reply - returning")
+
+        return result
 
     def get_settings(self):
         # After successful  connection get_settings will be call to set up the battery.
@@ -99,9 +118,9 @@ class egll(Battery):
         self.max_battery_discharge_current = utils.MAX_BATTERY_DISCHARGE_CURRENT
 
         self.balancer_voltage = int.from_bytes(config_results[25:27], "big")/1000
-        self.balancer_current_delta = int.from_bytes(config_results[27:29], "big")/10000
+        self.balancer_current_delta = int.from_bytes(config_results[27:29], "big")/1000
 
-        self.poll_interval = 2000
+
 
         return True
 
@@ -384,12 +403,12 @@ class egll(Battery):
             self.LENGTH_POS,
             self.LENGTH_CHECK
         )
-        if (self.debug):
-            logger.info(f'Returned: [{data.hex(":").upper()}]')
-
         if data is False:
             logger.error("read_serial_data_egll::Serial Data is Bad")
             return False
+        else:
+            if (self.debug):
+                logger.info(f'Returned: [{data.hex(":").upper()}]')
 
         # Its not quite modbus, but psuedo modbus'ish'
         modbus_address, modbus_type, modbus_cmd, modbus_packet_length = unpack_from(
