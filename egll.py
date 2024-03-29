@@ -8,7 +8,7 @@ import struct
 import utils
 
 #    Author: Pfitz /
-#    Date: 23 Sept 2023
+#    Date: 28 Mar 2024
 #    Version 1.0
 #     Cell Voltage Implemented
 #     Hardware Name / Version / Serial Implemented
@@ -16,13 +16,15 @@ import utils
 #     SoH / SoC State Implemented
 #     Temp Implemented
 #     Battery Voltage / Current
-#     Balacing Status
 #     BMS Config Read (Limited Values right now)
 
 #     Tasks:
 #       - When starting via start-serial, the connection reports a not successful
 #         Yet, tailing the serial log it is clear the driver is loaded, and working
 #         as it should. Has been stable for me.
+#       - Balacing Logic was buggy, commented out, and need to look more into
+#       - Multi-Battery Support - Has not been tested. Hardware ID is collected and used
+#         so using one usb to rx per bms should work. 
 
 
 # Battery Tested on:
@@ -33,8 +35,8 @@ import utils
 # https://eg4electronics.com/wp-content/uploads/2022/09/egll-MODBUS-Communication-Protocol_ENG-correct-1.pdf
 
 # add to file /data/etc/dbus-serialbattery/dbus-serialbattery.py
-# from bms.lifepower import egll
-# {"bms": egll, "baud": 9600, "address":b"\x7C"
+# from bms.egll import egll
+# {"bms": egll, "baud": 9600, "address":b"\x7C"}
 
 class egll(Battery):
     def __init__(self, port, baud, address):
@@ -55,7 +57,6 @@ class egll(Battery):
         self.runtime = 0  # TROUBLESHOOTING for no reply errors
         self.trigger_force_disable_discharge = None
         self.trigger_force_disable_charge = None
-        self.cells_volts_data_lastreadbad = False
 
     # Modbus uses 7C call vs Lifepower 7E, as return values do not correlate to the Lifepower ones if 7E is used.
     # at least on my own BMS.
@@ -82,13 +83,13 @@ class egll(Battery):
         result = self.read_gen_data()
         logger.info(f'Test Result: {result}')
         if result:
-            self.get_settings()
             logger.info(f'Poll Settings:')
+            self.get_settings()
             return True
         else:
             logger.error(">>> ERROR: No reply - returning")
 
-        return result
+        return True
 
     def get_settings(self):
         # After successful  connection get_settings will be call to set up the battery.
@@ -107,21 +108,19 @@ class egll(Battery):
             logger.info(f'Balancer Voltage (V): {int.from_bytes(config_results[25:27], "big")/1000}')
             logger.info(f'Balancer Difference (mV): {int.from_bytes(config_results[27:29], "big")}')
 
-        self.MIN_CELL_VOLTAGE = int.from_bytes(config_results[35:37], "big")/1000
-        self.MAX_CELL_VOLTAGE = int.from_bytes(config_results[47:49], "big")/1000
-        self.FLOAT_CELL_VOLTAGE = MAX_CELL_VOLTAGE - .9
+        #self.MIN_CELL_VOLTAGE = int.from_bytes(config_results[35:37], "big")/1000
+        #self.MAX_CELL_VOLTAGE = int.from_bytes(config_results[47:49], "big")/1000
+        #self.FLOAT_CELL_VOLTAGE = MAX_CELL_VOLTAGE - .9
 
-        self.min_battery_voltage = self.MIN_CELL_VOLTAGE * self.cell_count
-        self.max_battery_voltage = self.MAX_CELL_VOLTAGE * self.cell_count
+        self.min_battery_voltage = utils.MIN_CELL_VOLTAGE * self.cell_count
+        self.max_battery_voltage = utils.MAX_CELL_VOLTAGE * self.cell_count
 
         self.max_battery_charge_current = utils.MAX_BATTERY_CHARGE_CURRENT
         self.max_battery_discharge_current = utils.MAX_BATTERY_DISCHARGE_CURRENT
 
-        self.balancer_voltage = int.from_bytes(config_results[25:27], "big")/1000
-        self.balancer_current_delta = int.from_bytes(config_results[27:29], "big")/1000
-
-
-
+        #self.balancer_voltage = int.from_bytes(config_results[25:27], "big")/1000
+        #self.balancer_current_delta = int.from_bytes(config_results[27:29], "big")/1000
+        
         return True
 
     def refresh_data(self):
@@ -368,18 +367,19 @@ class egll(Battery):
         return True
 
     def get_balancing(self):
-        if (self.cell_max - self.cell_min) >= self.balancer_current_delta:
-            if self.cell_max >= self.balancer_voltage:
-                self.balancing = 1
-                logger.info(f'*** Balancing Battery ***')
-        else:
-            self.balancing = 0
-            logger.info(f'*** Not Balancing Battery ***')
-        if self.cell_average > self.balancer_voltage and round((self.cell_max-self.cell_min), 3) <= self.balancer_current_delta:
-            self.balacing = 2
-            logger.info(f'*** Finished Balancing Battery ***')
+        #if (self.cell_max - self.cell_min) >= self.balancer_current_delta:
+        #    if self.cell_max >= self.balancer_voltage:
+        #        self.balancing = 1
+        #        logger.info(f'*** Balancing Battery ***')
+        #else:
+        #    self.balancing = 0
+        #    logger.info(f'*** Not Balancing Battery ***')
+        #if self.cell_average > self.balancer_voltage and round((self.cell_max-self.cell_min), 3) <= self.balancer_current_delta:
+        #    self.balacing = 2
+        #    logger.info(f'*** Finished Balancing Battery ***')
 
-        return self.balancing
+        #return self.balancing
+        return 1 if self.balancing or self.balancing == 2 else 0
 
     def read_bms_config(self):
         logger.info(f'Executed read_bms_config function... function needs to be written')
@@ -430,3 +430,4 @@ class egll(Battery):
             logger.info(f'Modbus Type   : {modbus_type} [{hex(modbus_type)}]')
             logger.info(f'Modbus PackLen: {modbus_packet_length} [{hex(modbus_packet_length)}]')
             return False
+
