@@ -595,6 +595,7 @@ class EG4_LL(Battery):
             dataPacket = self.read_cell_details(id)
             if dataPacket is not False: # if True
                 self.battery_stats[id] = { **self.battery_stats[id], **dataPacket }
+            sleep(.2)
             id+=1
         result = self.rollupBatteryBank(self.battery_stats)
         if self.statuslogger is True:
@@ -674,6 +675,7 @@ class EG4_LL(Battery):
             else:
                 commandString = "UNKNOWN"
             logger.error(f'No Reply - BMS ID:{bmsId} Command-{commandString}')
+            sleep(1)
 
             return False
 
@@ -691,3 +693,4 @@ class EG4_LL(Battery):
             )
             logger.info(f'Modbus Packet : [ {serial_data.hex(":").upper()} ]')
         return serial_data
+
