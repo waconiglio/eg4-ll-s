@@ -40,7 +40,7 @@ import sys
 # Eg4 LL 12v 400 AH (single battery) x2
 # One RS232 Cable to USB is needed when connecting to the Cerbo GX
 # A networking cable should be connecte between each of the BMS RS485 Ports and the other BMS units
-# The master unit or first unit should have a Dip Switch ID set to 16
+# The master unit or first unit should have a Dip Switch ID set to 64
 # All other BMS should have a Dip switch setting of 1 - 15
 
 class EG4_LL(Battery):
@@ -63,7 +63,7 @@ class EG4_LL(Battery):
     debug_hex = False
     debug_config_hex = False
     debug_config = False
-    batteryPackId = [ 16, 1 ]
+    batteryPackId = [ 64 ]
     battery_stats = {}
 
     #balancing = 0
@@ -75,6 +75,9 @@ class EG4_LL(Battery):
     LENGTH_FIXED = -1
 
     commands = {
+      64 : {
+        "HW" : b"\x40\x03\x00\x69\x00\x23\xDB\x1E",
+        "CELL" : b"\x40\x03\x00\x00\x00\x27\x0A\xC1"},
       16 : {
         "HW" : b"\x10\x03\x00\x69\x00\x17\xD6\x99",
         "CELL" : b"\x10\x03\x00\x00\x00\x27\x06\x91"},
@@ -137,9 +140,9 @@ class EG4_LL(Battery):
             self.battery_stats = {}
             BMS_list = self.discovery_pack()
             if len(BMS_list) > 0:
-                if 16 in BMS_list:
-                    self.battery_stats[16] = self.read_cell_details(16)
-                    if self.battery_stats[16] is not False:
+                if 64 in BMS_list:
+                    self.battery_stats[64] = self.read_cell_details(64)
+                    if self.battery_stats[64] is not False:
                         reply = self.rollupBatteryBank(self.battery_stats)
                         if reply != "Failed":
                             return True
@@ -197,7 +200,7 @@ class EG4_LL(Battery):
         bmsId = 1
         bmsChain = {}
         if not self.batteryPackId:
-            while bmsId <= 16:
+            while bmsId <= 64:
                 attempts = 0
                 while attempts < 3:
                     reply = self.read_serial_data_eg4_ll(self.commands[bmsId]["HW"])
@@ -288,29 +291,29 @@ class EG4_LL(Battery):
 
     def rollupBatteryBank(self, batteryBankStats):
 
-        if self.battery_stats is False or self.battery_stats[16] is False:
+        if self.battery_stats is False or self.battery_stats[64] is False:
             return "Failed"
 
         #logger.info(f"batteryBankStats: {pformat(batteryBankStats)}")
-        self.voltage = self.battery_stats[16]["cell_voltage"]
-        self.current = self.battery_stats[16]["current"]
-        self.capacity_remain = self.battery_stats[16]["capacity_remain"]
-        self.capacity = self.battery_stats[16]["capacity"]
-        self.soc = self.battery_stats[16]["soc"]
-        self.soh = self.battery_stats[16]["soh"]
-        self.cycles = self.battery_stats[16]["cycles"]
-        self.temp1 = self.battery_stats[16]["temp1"]
-        self.temp2 = self.battery_stats[16]["temp2"]
-        self.temp_mos = self.battery_stats[16]["temp_mos"]
-        #self.serial_number = batteryBankStats[16]["hw_serial"]
-        #self.version = batteryBankStats[16]["hw_make"]
-        #self.hardware_version = batteryBankStats[16]["hw_version"]
+        self.voltage = self.battery_stats[64]["cell_voltage"]
+        self.current = self.battery_stats[64]["current"]
+        self.capacity_remain = self.battery_stats[64]["capacity_remain"]
+        self.capacity = self.battery_stats[64]["capacity"]
+        self.soc = self.battery_stats[64]["soc"]
+        self.soh = self.battery_stats[64]["soh"]
+        self.cycles = self.battery_stats[64]["cycles"]
+        self.temp1 = self.battery_stats[64]["temp1"]
+        self.temp2 = self.battery_stats[64]["temp2"]
+        self.temp_mos = self.battery_stats[64]["temp_mos"]
+        #self.serial_number = batteryBankStats[64]["hw_serial"]
+        #self.version = batteryBankStats[64]["hw_make"]
+        #self.hardware_version = batteryBankStats[64]["hw_version"]
         self.lookup_protection(self.battery_stats)
         self.lookup_warning(self.battery_stats)
 
         if len(self.battery_stats) > 1:
             for bmsId in self.battery_stats:
-                if bmsId != 16:
+                if bmsId != 64:
                     if bmsId != False:
                         if self.battery_stats[bmsId] is not False:
                             self.voltage = (self.voltage + self.battery_stats[bmsId]["cell_voltage"]) / 2
@@ -330,7 +333,7 @@ class EG4_LL(Battery):
 
         self.temp_max = max(self.temp1, self.temp2)
         self.temp_min = min(self.temp1, self.temp2)
-        self.cell_count = batteryBankStats[16]["cell_count"]
+        self.cell_count = batteryBankStats[64]["cell_count"]
         self.min_battery_voltage = float(utils.MIN_CELL_VOLTAGE * self.cell_count)
         self.max_battery_voltage = float(utils.MAX_CELL_VOLTAGE * self.cell_count)
 
@@ -339,10 +342,10 @@ class EG4_LL(Battery):
             for idx in range(self.cell_count):
                 self.cells.append(Cell(False))
 
-        self.cells[0].voltage = self.battery_stats[16]["cell1"]
-        self.cells[1].voltage = self.battery_stats[16]["cell2"]
-        self.cells[2].voltage = self.battery_stats[16]["cell3"]
-        self.cells[3].voltage = self.battery_stats[16]["cell4"]
+        self.cells[0].voltage = self.battery_stats[64]["cell1"]
+        self.cells[1].voltage = self.battery_stats[64]["cell2"]
+        self.cells[2].voltage = self.battery_stats[64]["cell3"]
+        self.cells[3].voltage = self.battery_stats[64]["cell4"]
         #self.cells[4].voltage = batteryBankStats[1]["cell1"]
         #self.cells[5].voltage = batteryBankStats[1]["cell2"]
         #self.cells[6].voltage = batteryBankStats[1]["cell3"]
@@ -360,10 +363,10 @@ class EG4_LL(Battery):
         return True
 
     def status_logger(self, batteryBankStats):
-        if self.battery_stats is not False or self.battery_stats[16] is not False:
+        if self.battery_stats is not False or self.battery_stats[64] is not False:
             logger.info("===== HW Info =====")
-            logger.info(f"Battery Make/Model: {self.battery_stats[16]['hw_make']}")
-            logger.info(f"Hardware Version: {self.battery_stats[16]['hw_version']}")
+            logger.info(f"Battery Make/Model: {self.battery_stats[64]['hw_make']}")
+            logger.info(f"Hardware Version: {self.battery_stats[64]['hw_version']}")
             for bmsId in self.battery_stats:
                 if self.battery_stats[bmsId] is not False:
                     logger.info(f"Serial Number: {self.battery_stats[bmsId]['hw_serial']}")
@@ -627,14 +630,14 @@ class EG4_LL(Battery):
         return balacing_state
 
     def get_max_temp(self):
-        self.temp1 = self.battery_stats[16]["temp1"]
-        self.temp2 = self.battery_stats[16]["temp2"]
+        self.temp1 = self.battery_stats[64]["temp1"]
+        self.temp2 = self.battery_stats[64]["temp2"]
         temp_max = max(self.temp1, self.temp2)
         return temp_max
 
     def get_min_temp(self):
-        self.temp1 = self.battery_stats[16]["temp1"]
-        self.temp2 = self.battery_stats[16]["temp2"]
+        self.temp1 = self.battery_stats[64]["temp1"]
+        self.temp2 = self.battery_stats[64]["temp2"]
         temp_min = min(self.temp1, self.temp2)
         return temp_min
 
@@ -658,9 +661,12 @@ class EG4_LL(Battery):
         if self.debug:
             logger.info(f'Executed Command: {command.hex(":").upper()}')
 
+        #print('Sending EG4 LL-S command: ',command)
+
         serial_data = read_serial_data(
             command, self.port, self.baud_rate, self.LENGTH_POS, self.LENGTH_CHECK
         )
+        #print('  got response',serial_data)
         if not serial_data: #Test for False / No-Reply
             failedCommandHex = command.hex(":").upper()
             bmsId = int(failedCommandHex[0:2], 16)
