@@ -12,6 +12,7 @@ from time import sleep
 from pprint import pformat
 import utils
 import sys
+import crc16_modbus
 
 #    Author: Pfitz /
 #    Date: 01 Aug 2024
@@ -74,61 +75,27 @@ class EG4_LL(Battery):
     LENGTH_POS = 2  # offset starting from 0
     LENGTH_FIXED = -1
 
-    commands = {
-      64 : {
-        "HW" : b"\x40\x03\x00\x69\x00\x23\xDB\x1E",
-        "CELL" : b"\x40\x03\x00\x00\x00\x27\x0A\xC1"},
-      16 : {
-        "HW" : b"\x10\x03\x00\x69\x00\x17\xD6\x99",
-        "CELL" : b"\x10\x03\x00\x00\x00\x27\x06\x91"},
-      1 : {
-        "HW" : b"\x01\x03\x00\x69\x00\x17\xD5\xD8",
-        "CELL" : b"\x01\x03\x00\x00\x00\x27\x05\xD0",
-        "CONFIG" : b"\x01\x03\x00\x2D\x00\x5B\x94\x38"},
-      2: {
-        "HW" : b"\x02\x03\x00\x69\x00\x17\xD5\xEB",
-        "CELL" : b"\x02\x03\x00\x00\x00\x27\x05\xE3"},
-      3: {
-        "HW" : b"\x03\x03\x00\x69\x00\x17\xD4\x3A",
-        "CELL" : b"\x03\x03\x00\x00\x00\x27\x04\x32"},
-      4: {
-        "HW" : b"\x04\x03\x00\x69\x00\x17\xD5\x8D",
-        "CELL" : b"\x04\x03\x00\x00\x00\x27\x05\x85"},
-      5: {
-        "HW" : b"\x05\x03\x00\x69\x00\x17\xD4\x5C",
-        "CELL" : b"\x05\x03\x00\x00\x00\x27\x04\x54"},
-      6: {
-        "HW" : b"\x06\x03\x00\x69\x00\x17\xD4\x6F",
-        "CELL" : b"\x06\x03\x00\x00\x00\x27\x04\x67"},
-      7: {
-        "HW" : b"\x07\x03\x00\x69\x00\x17\xD5\xBE",
-        "CELL" : b"\x07\x03\x00\x00\x00\x27\x05\xB6"},
-      8: {
-        "HW" : b"\x08\x03\x00\x69\x00\x17\xD5\x41",
-        "CELL" : b"\x08\x03\x00\x00\x00\x27\x05\x49"},
-      9: {
-        "HW" : b"\x09\x03\x00\x69\x00\x17\xD4\x90",
-        "CELL" : b"\x09\x03\x00\x00\x00\x27\x04\x98"},
-      10: {
-        "HW" : b"\x0A\x03\x00\x69\x00\x17\xD4\xA3",
-        "CELL" : b"\x0A\x03\x00\x00\x00\x27\x04\xAB"},
-      11: {
-        "HW" : b"\x0B\x03\x00\x69\x00\x17\xD5\x72",
-        "CELL" : b"\x0B\x03\x00\x00\x00\x27\x05\x7A"},
-      12: {
-        "HW" : b"\x0C\x03\x00\x69\x00\x17\xD4\xC5",
-        "CELL" : b"\x0C\x03\x00\x00\x00\x27\x04\xCD"},
-      13: {
-        "HW" : b"\x0D\x03\x00\x69\x00\x17\xD5\x14",
-        "CELL" : b"\x0D\x03\x00\x00\x00\x27\x05\x1c"},
-      14: {
-        "HW" : b"\x0E\x03\x00\x69\x00\x17\xD5\x27",
-        "CELL" : b"\x0E\x03\x00\x00\x00\x27\x05\x2F"},
-      15: {
-        "HW" : b"\x0F\x03\x00\x69\x00\x17\xD4\xF6",
-        "CELL" : b"\x0F\x03\x00\x00\x00\x27\x04\xFE"}
-    }
+    commands = {'HW': b"\x03\x00\x69\x00\x23",
+                'CELL': b"\x03\x00\x00\x00\x27",
+               }
+    def eg4_command(address, command):
+        return eg4_modbus_bytes(address, self.commands[command])
 
+    def eg4_modbus_bytes(address, command_bytes):
+        command_without_crc = address.to_bytes(1) + command_bytes
+        return command_without_crc + self.crc_bytestring(command_without_crc)
+
+    def eg4_check_crc(response):
+        payload = response[:-2]
+        crc_given = response[-2:]
+        crc_calculated = self.eg4_crc_bytestring(payload)
+        return crc_given == crc_calculated
+
+    def eg4_crc_bytestring(payload):
+        return crc16_modbus.crc_bytestring.to_bytes(2,'little')
+        
+    
+    
     def unique_identifier(self):
         return "4S12400190500001"
 
@@ -203,7 +170,7 @@ class EG4_LL(Battery):
             while bmsId <= 64:
                 attempts = 0
                 while attempts < 3:
-                    reply = self.read_serial_data_eg4_ll(self.commands[bmsId]["HW"])
+                    reply = self.read_serial_data_eg4_ll(self.eg4_command_string(bmsId, command)[]["HW"])
                     if reply is not False:
                         bmsChain.update({bmsId : True})
                         break
@@ -214,7 +181,7 @@ class EG4_LL(Battery):
             for Id in self.batteryPackId:
                 attempts = 0
                 while attempts < 1:
-                    reply = self.read_serial_data_eg4_ll(self.commands[Id]["HW"])
+                    reply = self.read_serial_data_eg4_ll(self.eg4_command(Id,"HW"))
                     if reply is not False:
                         bmsChain.update({Id : True})
                         break
@@ -227,7 +194,7 @@ class EG4_LL(Battery):
 
     def read_hw_details(self, id):
         battery = {}
-        result = self.read_serial_data_eg4_ll(self.commands[id]["HW"])
+        result = self.read_serial_data_eg4_ll(self.eg4_command(id,"HW"))
         if result is False:
             return False
 
@@ -243,7 +210,7 @@ class EG4_LL(Battery):
     def read_cell_details(self, id):
 
         battery = {}
-        packet = self.read_serial_data_eg4_ll(self.commands[id]["CELL"])
+        packet = self.read_serial_data_eg4_ll(self.eg4_command(id,"CELL"))
         if packet is False:
             return False
 
@@ -668,7 +635,12 @@ class EG4_LL(Battery):
             command, self.port, self.baud_rate, self.LENGTH_POS, self.LENGTH_CHECK
         )
         #print('  got response',serial_data)
-        if not serial_data: #Test for False / No-Reply
+
+        if serial_data:
+            crc_check_failed = not self.eg4_check_crc(serial_data)
+        else:
+            crc_check_failed = None
+        if not serial_data or crc_check_failed: #Test for False / No-Reply
             failedCommandHex = command.hex(":").upper()
             bmsId = int(failedCommandHex[0:2], 16)
             cmdId = failedCommandHex[9:11]
@@ -680,7 +652,10 @@ class EG4_LL(Battery):
                 commandString = "Config"
             else:
                 commandString = "UNKNOWN"
-            logger.error(f'No Reply - BMS ID:{bmsId} Command-{commandString}')
+            if crc_check_failed:
+                logger.error(f'CRC check failed - BMS ID:{bmsId} Command-{commandString}')
+            else:
+                logger.error(f'No Reply - BMS ID:{bmsId} Command-{commandString}')
             sleep(1)
 
             return False
