@@ -55,7 +55,7 @@ table = (
 0x4400, 0x84C1, 0x8581, 0x4540, 0x8701, 0x47C0, 0x4680, 0x8641,
 0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040 )
 
-def calcByte( ch, crc):
+def crc_byte( ch, crc):
     """Given a new Byte and previous CRC, Calc a new CRC-16"""
     if type(ch) == type("c"):
         by = ord( ch)
@@ -64,7 +64,7 @@ def calcByte( ch, crc):
     crc = (crc >> 8) ^ table[(crc ^ by) & 0xFF]
     return (crc & 0xFFFF)
 
-def calcString( st, crc=INITIAL_MODBUS):
+def crc_bytestring( st, crc=INITIAL_MODBUS):
     """Given a bunary string and starting CRC, Calc a final CRC-16 """
     for ch in st:
         crc = (crc >> 8) ^ table[(crc ^ ch) & 0xFF]
