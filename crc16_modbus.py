@@ -70,4 +70,4 @@ def calcString( st, crc=INITIAL_MODBUS):
         crc = (crc >> 8) ^ table[(crc ^ ch) & 0xFF]
     return crc
 
-print( calcString(b"\x40\x03\x00\x69\x00\x23").to_bytes(2,'little') )
+#print( calcString(b"\x40\x03\x00\x69\x00\x23").to_bytes(2,'little') )
