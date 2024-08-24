@@ -12,7 +12,7 @@ from time import sleep
 from pprint import pformat
 import utils
 import sys
-import crc16_modbus
+from . import crc16_modbus
 
 #    Author: Pfitz /
 #    Date: 01 Aug 2024
@@ -78,21 +78,21 @@ class EG4_LL(Battery):
     commands = {'HW': b"\x03\x00\x69\x00\x23",
                 'CELL': b"\x03\x00\x00\x00\x27",
                }
-    def eg4_command(address, command):
-        return eg4_modbus_bytes(address, self.commands[command])
+    def eg4_command(self, address, command):
+        return self.eg4_modbus_bytes(address, self.commands[command])
 
-    def eg4_modbus_bytes(address, command_bytes):
-        command_without_crc = address.to_bytes(1) + command_bytes
-        return command_without_crc + self.crc_bytestring(command_without_crc)
+    def eg4_modbus_bytes(self, address, command_bytes):
+        command_without_crc = address.to_bytes(1,'little') + command_bytes
+        return command_without_crc + self.eg4_crc_bytestring(command_without_crc)
 
-    def eg4_check_crc(response):
+    def eg4_check_crc(self, response):
         payload = response[:-2]
         crc_given = response[-2:]
         crc_calculated = self.eg4_crc_bytestring(payload)
         return crc_given == crc_calculated
 
-    def eg4_crc_bytestring(payload):
-        return crc16_modbus.crc_bytestring.to_bytes(2,'little')
+    def eg4_crc_bytestring(self, payload):
+        return crc16_modbus.crc_bytestring(payload).to_bytes(2,'little')
         
     
     
@@ -170,7 +170,7 @@ class EG4_LL(Battery):
             while bmsId <= 64:
                 attempts = 0
                 while attempts < 3:
-                    reply = self.read_serial_data_eg4_ll(self.eg4_command_string(bmsId, command)[]["HW"])
+                    reply = self.read_serial_data_eg4_ll(self.eg4_command(bmsId, "HW"))
                     if reply is not False:
                         bmsChain.update({bmsId : True})
                         break
