@@ -309,24 +309,13 @@ class EG4_LL(Battery):
             for idx in range(self.cell_count):
                 self.cells.append(Cell(False))
 
-        self.cells[0].voltage = self.battery_stats[64]["cell1"]
-        self.cells[1].voltage = self.battery_stats[64]["cell2"]
-        self.cells[2].voltage = self.battery_stats[64]["cell3"]
-        self.cells[3].voltage = self.battery_stats[64]["cell4"]
-        #self.cells[4].voltage = batteryBankStats[1]["cell1"]
-        #self.cells[5].voltage = batteryBankStats[1]["cell2"]
-        #self.cells[6].voltage = batteryBankStats[1]["cell3"]
-        #self.cells[7].voltage = batteryBankStats[1]["cell4"]
+        # need to update this mechanism to be aware of cells from other batteries down the chain
+        for i in range(self.cell_count):
+            cell_name = 'cell{:}'.format(i+1)
+            self.cells[i].voltage = self.battery_stats[64][cell_name]
 
-
-        self.cell_min_voltage = min(self.cells[0].voltage, self.cells[1].voltage,
-                                    self.cells[2].voltage, self.cells[3].voltage)
-                #                    self.cells[4].voltage, self.cells[5].voltage,
-                #                    self.cells[6].voltage, self.cells[7].voltage)
-        self.cell_max_voltage = max(self.cells[0].voltage, self.cells[1].voltage,
-                                    self.cells[2].voltage, self.cells[3].voltage)
-                #                    self.cells[4].voltage, self.cells[5].voltage,
-                #                    self.cells[6].voltage, self.cells[7].voltage)
+        self.cell_min_voltage = min(cell.voltage for cell in self.cells)
+        self.cell_max_voltage = max(cell.voltage for cell in self.cells)
         return True
 
     def status_logger(self, batteryBankStats):
